@@ -1,5 +1,7 @@
 import asyncio
 import os
+import pathlib
+from dotenv import load_dotenv
 
 from openai import AsyncOpenAI
 
@@ -12,24 +14,28 @@ from agents import (
     set_tracing_disabled,
 )
 
-BASE_URL = os.getenv("EXAMPLE_BASE_URL") or ""
-API_KEY = os.getenv("EXAMPLE_API_KEY") or ""
-MODEL_NAME = os.getenv("EXAMPLE_MODEL_NAME") or ""
+# Load environment variables from the .env file in the project root
+# First, determine the root directory (2 levels up from this file)
+current_dir = pathlib.Path(__file__).parent.absolute()
+root_dir = current_dir.parent.parent
+dotenv_path = root_dir / ".env"
+load_dotenv(dotenv_path=dotenv_path)
 
-if not BASE_URL or not API_KEY or not MODEL_NAME:
-    raise ValueError(
-        "Please set EXAMPLE_BASE_URL, EXAMPLE_API_KEY, EXAMPLE_MODEL_NAME via env var or code."
-    )
+# Google Gemini API configuration
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+API_KEY = os.getenv("GOOGLE_API_KEY")
+MODEL_NAME = "gemini-2.0-pro-exp-02-05"
+
+if not API_KEY:
+    raise ValueError(f"Please set GOOGLE_API_KEY in your .env file at {dotenv_path}")
 
 
-"""This example uses a custom provider for all requests by default. We do three things:
-1. Create a custom client.
+"""This example uses Google's Gemini API for all requests by default. We do three things:
+1. Create a custom client that connects to Google's OpenAI-compatible endpoint.
 2. Set it as the default OpenAI client, and don't use it for tracing.
-3. Set the default API as Chat Completions, as most LLM providers don't yet support Responses API.
+3. Set the default API as Chat Completions, as Google Gemini doesn't support OpenAI's Responses API.
 
-Note that in this example, we disable tracing under the assumption that you don't have an API key
-from platform.openai.com. If you do have one, you can either set the `OPENAI_API_KEY` env var
-or call set_tracing_export_api_key() to set a tracing specific key.
+Note: We disable tracing since it might require the regular OpenAI API.
 """
 
 client = AsyncOpenAI(
@@ -39,6 +45,7 @@ client = AsyncOpenAI(
 set_default_openai_client(client=client, use_for_tracing=False)
 set_default_openai_api("chat_completions")
 set_tracing_disabled(disabled=True)
+print("Using Google Gemini API")
 
 
 @function_tool
@@ -49,7 +56,7 @@ def get_weather(city: str):
 
 async def main():
     agent = Agent(
-        name="Assistant",
+        name="Gemini Assistant",
         instructions="You only respond in haikus.",
         model=MODEL_NAME,
         tools=[get_weather],
