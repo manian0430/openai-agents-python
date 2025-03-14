@@ -1,10 +1,44 @@
 import asyncio
 import random
+import os
+import pathlib
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
 from typing import Any
 
 from pydantic import BaseModel
 
 from agents import Agent, AgentHooks, RunContextWrapper, Runner, Tool, function_tool
+from agents import set_default_openai_client, set_default_openai_api, set_tracing_disabled
+
+# Load environment variables from the .env file in the project root
+# First, determine the root directory (2 levels up from this file)
+current_dir = pathlib.Path(__file__).parent.absolute()
+root_dir = current_dir.parent.parent
+dotenv_path = root_dir / ".env"
+load_dotenv(dotenv_path=dotenv_path)
+
+# Google Gemini API configuration
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+API_KEY = os.getenv("GOOGLE_API_KEY")
+MODEL_NAME = "gemini-2.0-pro-exp-02-05"
+
+if not API_KEY:
+    raise ValueError(f"Please set GOOGLE_API_KEY in your .env file at {dotenv_path}")
+
+# Configure the AsyncOpenAI client to use Google's Gemini API
+client = AsyncOpenAI(
+    base_url=BASE_URL,
+    api_key=API_KEY
+)
+    
+# Configure the Agents SDK to use the custom client
+set_default_openai_client(client=client, use_for_tracing=False)
+set_default_openai_api("chat_completions")
+    
+# Disable tracing as it might need the regular OpenAI API
+set_tracing_disabled(disabled=True)
+print("Using Google Gemini API")
 
 
 class CustomAgentHooks(AgentHooks):
@@ -66,19 +100,19 @@ class FinalResult(BaseModel):
 
 multiply_agent = Agent(
     name="Multiply Agent",
-    instructions="Multiply the number by 2 and then return the final result.",
+    instructions="Multiply the number by 2 and then return the final result as a number.",
     tools=[multiply_by_two],
-    output_type=FinalResult,
     hooks=CustomAgentHooks(display_name="Multiply Agent"),
+    model=MODEL_NAME,
 )
 
 start_agent = Agent(
     name="Start Agent",
     instructions="Generate a random number. If it's even, stop. If it's odd, hand off to the multipler agent.",
     tools=[random_number],
-    output_type=FinalResult,
     handoffs=[multiply_agent],
     hooks=CustomAgentHooks(display_name="Start Agent"),
+    model=MODEL_NAME,
 )
 
 
