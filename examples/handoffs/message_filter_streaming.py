@@ -2,22 +2,57 @@ from __future__ import annotations
 
 import json
 import random
+import os
+import pathlib
+from dotenv import load_dotenv
 
-from agents import Agent, HandoffInputData, Runner, function_tool, handoff, trace
+from openai import AsyncOpenAI
+
+from agents import Agent, HandoffInputData, Runner, handoff, trace
+from agents import set_default_openai_client, set_default_openai_api, set_tracing_disabled
 from agents.extensions import handoff_filters
 
+# Load environment variables from the .env file in the project root
+# First, determine the root directory (2 levels up from this file)
+current_dir = pathlib.Path(__file__).parent.absolute()
+root_dir = current_dir.parent.parent
+dotenv_path = root_dir / ".env"
+load_dotenv(dotenv_path=dotenv_path)
 
-@function_tool
-def random_number_tool(max: int) -> int:
-    """Return a random integer between 0 and the given maximum."""
-    return random.randint(0, max)
+# Google Gemini API configuration
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+API_KEY = os.getenv("GOOGLE_API_KEY")
+MODEL_NAME = "gemini-2.0-pro-exp-02-05"
+
+if not API_KEY:
+    raise ValueError(f"Please set GOOGLE_API_KEY in your .env file at {dotenv_path}")
+
+"""This example demonstrates streaming with handoffs and message filtering using Google's Gemini API.
+We'll set up Google Gemini as the default model for all agents.
+
+Note: We've removed all tool usage since there are compatibility issues between Google Gemini
+and function calling in the OpenAI Agents SDK.
+
+We're also using trace() for demonstration but disabling the actual export to OpenAI.
+"""
+
+# Configure the AsyncOpenAI client to use Google's Gemini API
+client = AsyncOpenAI(
+    base_url=BASE_URL,
+    api_key=API_KEY
+)
+    
+# Configure the Agents SDK to use the custom client
+set_default_openai_client(client=client, use_for_tracing=False)
+set_default_openai_api("chat_completions")
+    
+# Disable tracing export since it might need the regular OpenAI API
+set_tracing_disabled(disabled=True)
+print("Using Google Gemini API")
 
 
 def spanish_handoff_message_filter(handoff_message_data: HandoffInputData) -> HandoffInputData:
-    # First, we'll remove any tool-related messages from the message history
-    handoff_message_data = handoff_filters.remove_all_tools(handoff_message_data)
-
-    # Second, we'll also remove the first two items from the history, just for demonstration
+    # Remove the first two items from the history, just for demonstration
     history = (
         tuple(handoff_message_data.input_history[2:])
         if isinstance(handoff_message_data.input_history, tuple)
@@ -32,15 +67,16 @@ def spanish_handoff_message_filter(handoff_message_data: HandoffInputData) -> Ha
 
 
 first_agent = Agent(
-    name="Assistant",
+    name="Simple Assistant",
     instructions="Be extremely concise.",
-    tools=[random_number_tool],
+    model=MODEL_NAME,
 )
 
 spanish_agent = Agent(
     name="Spanish Assistant",
     instructions="You only speak Spanish and are extremely concise.",
     handoff_description="A Spanish-speaking assistant.",
+    model=MODEL_NAME,
 )
 
 second_agent = Agent(
@@ -49,8 +85,8 @@ second_agent = Agent(
         "Be a helpful assistant. If the user speaks Spanish, handoff to the Spanish assistant."
     ),
     handoffs=[handoff(spanish_agent, input_filter=spanish_handoff_message_filter)],
+    model=MODEL_NAME,
 )
-
 
 async def main():
     # Trace the entire run as a single workflow
@@ -60,11 +96,11 @@ async def main():
 
         print("Step 1 done")
 
-        # 2. Ask it to square a number
+        # 2. Ask a question
         result = await Runner.run(
             second_agent,
             input=result.to_input_list()
-            + [{"content": "Can you generate a random number between 0 and 100?", "role": "user"}],
+            + [{"content": "Tell me about artificial intelligence.", "role": "user"}],
         )
 
         print("Step 2 done")
@@ -75,7 +111,7 @@ async def main():
             input=result.to_input_list()
             + [
                 {
-                    "content": "I live in New York City. Whats the population of the city?",
+                    "content": "I live in New York City. What's the population of the city?",
                     "role": "user",
                 }
             ],
@@ -94,81 +130,23 @@ async def main():
                 }
             ],
         )
-        async for _ in stream_result.stream_events():
-            pass
-
+        
+        # Display the streaming output
+        print("\nStreaming response:")
+        async for event in stream_result.stream_events():
+            if event.type == "raw_response_event" and hasattr(event.data, "delta"):
+                print(event.data.delta, end="", flush=True)
+        
+        print("\n")
         print("Step 4 done")
 
     print("\n===Final messages===\n")
 
     # 5. That should have caused spanish_handoff_message_filter to be called, which means the
-    # output should be missing the first two messages, and have no tool calls.
+    # output should be missing the first two messages.
     # Let's print the messages to see what happened
     for item in stream_result.to_input_list():
         print(json.dumps(item, indent=2))
-        """
-        $python examples/handoffs/message_filter_streaming.py
-        Step 1 done
-        Step 2 done
-        Step 3 done
-        Tu nombre y lugar de residencia no los tengo disponibles. Solo sé que mencionaste vivir en la ciudad de Nueva York.
-        Step 4 done
-
-        ===Final messages===
-
-        {
-            "content": "Can you generate a random number between 0 and 100?",
-            "role": "user"
-            }
-            {
-            "id": "...",
-            "content": [
-                {
-                "annotations": [],
-                "text": "Sure! Here's a random number between 0 and 100: **37**.",
-                "type": "output_text"
-                }
-            ],
-            "role": "assistant",
-            "status": "completed",
-            "type": "message"
-            }
-            {
-            "content": "I live in New York City. Whats the population of the city?",
-            "role": "user"
-            }
-            {
-            "id": "...",
-            "content": [
-                {
-                "annotations": [],
-                "text": "As of the latest estimates, New York City's population is approximately 8.5 million people. Would you like more information about the city?",
-                "type": "output_text"
-                }
-            ],
-            "role": "assistant",
-            "status": "completed",
-            "type": "message"
-            }
-            {
-            "content": "Por favor habla en espa\u00f1ol. \u00bfCu\u00e1l es mi nombre y d\u00f3nde vivo?",
-            "role": "user"
-            }
-            {
-            "id": "...",
-            "content": [
-                {
-                "annotations": [],
-                "text": "No s\u00e9 tu nombre, pero me dijiste que vives en Nueva York.",
-                "type": "output_text"
-                }
-            ],
-            "role": "assistant",
-            "status": "completed",
-            "type": "message"
-            }
-        """
-
 
 if __name__ == "__main__":
     import asyncio
